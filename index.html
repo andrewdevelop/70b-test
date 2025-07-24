@@ -969,17 +969,17 @@
 
     // Define initial nodes
     const initialNodesData = [
-      { id: '1', type: 'source_ac', name: 'Main Utility\nPower', x: 100, y: 150 },
+      { id: '1', type: 'source_ac', name: 'Main Utility\nPower', x: 50, y: 150 },
       { id: '2', type: 'circuit_breaker', name: 'Main\nBreaker', x: 250, y: 150 },
       { id: '3', type: 'panel', name: 'Main Power\nDistribution', x: 450, y: 150 },
       // Branch 1
       { id: '4', type: 'transformer', name: '208V to 120V\nXFMR', x: 650, y: 100 },
-      { id: '7', type: 'duplex_outlet', name: 'Workbench\nOutlet', x: 800, y: 100 },
+      { id: '7', type: 'duplex_outlet', name: 'Workbench\nOutlet', x: 850, y: 100 },
       // Branch 2
       { id: '5', type: 'motor', name: 'HVAC\nUnit', x: 650, y: 250 },
       // Branch 3
       { id: '6', type: 'light_bulb', name: 'Office\nLighting', x: 650, y: 400 },
-      { id: '8', type: 'switch_spst', name: 'Light\nSwitch', x: 500, y: 400 },
+      { id: '8', type: 'switch_spst', name: 'Light\nSwitch', x: 850, y: 400 },
     ];
 
     initialNodesData.forEach(nodeData => {
@@ -990,9 +990,9 @@
     const initialLinksData = [
       { from: '1', to: '2', bends: [] },
       { from: '2', to: '3', bends: [] },
-      { from: '3', to: '4', bends: [{x: 550, y: 100}] },
-      { from: '3', 'to': '5', bends: [{x: 550, y: 250}] },
-      { from: '3', to: '6', bends: [{x: 550, y: 400}] },
+      { from: '3', to: '4', bends: [] },
+      { from: '3', 'to': '5', bends: [] },
+      { from: '3', to: '6', bends: [] },
       { from: '4', to: '7', bends: [] },
       { from: '8', to: '6', bends: [] },
     ];
