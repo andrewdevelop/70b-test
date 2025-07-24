@@ -1,0 +1,1008 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Electrical Diagram Editor (OOP Enhanced - Bend Point Drag Fix)</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: sans-serif;
+      overflow: hidden; /* Prevent scrollbars */
+    }
+    svg {
+      width: 100vw;
+      height: 100vh;
+      background-color: #f0f0f0;
+      cursor: default;
+    }
+
+    /* Styles for the node group */
+    .node {
+      /* Overall node group doesn't have a direct fill/stroke */
+      fill: none;
+      stroke: none;
+    }
+
+    /* Style for the explicit background rect of each node (for clicking and visual fill) */
+    .node .node-background {
+      fill: #ffffff;
+      stroke: #bbb; /* Lighter stroke for the overall node box */
+      stroke-width: 1px;
+      rx: 6; /* Rounded corners for the background box */
+      ry: 6;
+      cursor: grab; /* Indicate draggable */
+    }
+    .node .node-background:active {
+        cursor: grabbing;
+    }
+    .node.selected .node-background {
+        stroke: #0077ff; /* Highlight for selected node in connect mode */
+        stroke-width: 2px;
+    }
+
+
+    /* Styles for the <use> element which references the symbol */
+    .node use {
+        /* Symbols are generally drawn without their own fill, relying on the background rect */
+        fill: none;
+        stroke: none;
+      pointer-events: none;
+    }
+    /* Styles applied to elements *inside* the <symbol> definition via currentColor */
+    /* This ensures internal lines/shapes of symbols are correctly colored */
+    .node use circle,
+    .node use rect,
+    .node use line,
+    .node use path {
+        stroke: #333; /* Make internal symbol lines dark */
+        fill: none; /* Ensure internal shapes are not filled unless specified by symbol */
+    }
+    .node use text { /* For 'M' in motor symbol */
+        fill: #333; /* Make internal symbol text dark */
+    }
+
+    /* Styles for node text labels */
+    .node .node-label {
+      pointer-events: none; /* Text should not interfere with drag */
+      font-size: 11px;
+      fill: #333;
+      user-select: none; /* Prevent text selection */
+      dominant-baseline: middle; /* Vertically align text center to its y-coordinate */
+      white-space: pre; /* Preserve whitespace for multiline text */
+    }
+
+    /* Styles for electrical links (wires) */
+    .link {
+      stroke: #555;
+      stroke-width: 2;
+      fill: none; /* Lines should not have fill */
+      pointer-events: none; /* Polyline itself does not participate in hover/click to avoid blocking hotspots */
+    }
+    /* Styles for bend point handles */
+    .bend-point {
+      fill: #0077ff;
+      stroke: #fff;
+      stroke-width: 1px;
+      cursor: pointer;
+      pointer-events: all; /* Explicitly ensure it receives all pointer events */
+    }
+    /* Styles for the '+' add bend point indicator */
+    .plus-indicator circle {
+      fill: rgba(0, 119, 255, 0.7);
+      stroke: #fff;
+      stroke-width: 1px;
+    }
+    .plus-indicator text {
+      fill: #fff;
+      font-size: 14px;
+      font-weight: bold;
+      text-anchor: middle;
+      dominant-baseline: central;
+      pointer-events: none; /* Text should not block interaction */
+    }
+
+    /* --- Tools Panel --- */
+    #tools-panel {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: #fff;
+      border: 1px solid #ccc;
+      padding: 10px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+      border-radius: 5px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      z-index: 1000; /* Ensure it's above the SVG */
+    }
+    #tools-panel button {
+      padding: 8px 12px;
+      border: 1px solid #0077ff;
+      background-color: #0077ff;
+      color: white;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: background-color 0.2s ease;
+    }
+    #tools-panel button:hover {
+      background-color: #005bb5;
+    }
+    #tools-panel button.active {
+        background-color: #005bb5;
+        border-color: #003f7a;
+    }
+    #tools-panel .mode-status {
+        font-size: 12px;
+        color: #555;
+        margin-top: 5px;
+    }
+
+    /* --- Context Menu --- */
+    #context-menu {
+        position: absolute;
+        background: #fff;
+        border: 1px solid #ccc;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        border-radius: 4px;
+        padding: 5px 0;
+        z-index: 2000; /* Ensure it's above everything */
+        display: none; /* Hidden by default */
+    }
+    #context-menu ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+    }
+    #context-menu ul li {
+        padding: 8px 15px;
+        cursor: pointer;
+        font-size: 14px;
+        color: #333;
+    }
+    #context-menu ul li:hover {
+        background-color: #f0f0f0;
+    }
+    #context-menu ul li.disabled {
+        color: #ccc;
+        cursor: not-allowed;
+    }
+  </style>
+</head>
+<body>
+  <div id="tools-panel">
+    <button id="add-node-btn">Add Node</button>
+    <button id="connect-btn">Connect</button>
+    <div class="mode-status">Mode: <span id="current-mode-display">Select</span></div>
+  </div>
+
+  <svg id="canvas">
+    <defs>
+      <!-- SVG Symbols will be dynamically injected here by the JavaScript -->
+    </defs>
+  </svg>
+
+  <div id="context-menu">
+    <ul>
+      <!-- Menu items will be dynamically inserted here -->
+    </ul>
+  </div>
+
+  <script type="module">
+    // Python generated symbols as a string (from previous step)
+    const symbolSvgDefs = `
+<symbol id='source_ac' viewBox='-30 -30 60 60'><circle cx='0' cy='0' r='20' fill='none' stroke='currentColor' stroke-width='2'/><path d='M-10,0 C-5,-10 5,10 10,0' fill='none' stroke='currentColor' stroke-width='2'/></symbol><symbol id='circuit_breaker' viewBox='-25 -25 50 50'><rect x='-15' y='-20' width='30' height='40' fill='none' stroke='currentColor' stroke-width='2'/><line x1='-15' y1='-20' x2='15' y2='20' stroke='currentColor' stroke-width='2'/></symbol><symbol id='transformer' viewBox='-30 -20 60 40'><path d='M-25,10 C-15,-10 -5,10 5,-10 C15,10 25,-10' fill='none' stroke='currentColor' stroke-width='2'/><line x1='0' y1='-20' x2='0' y2='20' stroke='currentColor' stroke-width='2'/><line x1='5' y1='-20' x2='5' y2='20' stroke='currentColor' stroke-width='2'/><path d='M-25,-10 C-15,10 -5,-10 5,10 C15,-10 25,10' fill='none' stroke='currentColor' stroke-width='2'/></symbol><symbol id='motor' viewBox='-25 -25 50 50'><circle cx='0' cy='0' r='20' fill='none' stroke='currentColor' stroke-width='2'/><text x='0' y='5' text-anchor='middle' font-size='18' fill='currentColor' font-weight='bold'>M</text></symbol><symbol id='light_bulb' viewBox='-25 -25 50 50'><circle cx='0' cy='0' r='20' fill='none' stroke='currentColor' stroke-width='2'/><line x1='-10' y1='-10' x2='10' y2='10' stroke='currentColor' stroke-width='2'/><line x1='10' y1='-10' x2='-10' y2='10' stroke='currentColor' stroke-width='2'/></symbol><symbol id='duplex_outlet' viewBox='-25 -25 50 50'><rect x='-15' y='-20' width='30' height='40' fill='none' stroke='currentColor' stroke-width='2'/><line x1='-10' y1='-10' x2='10' y2='-10' stroke='currentColor' stroke-width='2'/><line x1='-10' y1='-5' x2='10' y2='-5' stroke='currentColor' stroke='currentColor' stroke-width='2'/><circle cx='0' cy='-15' r='2' fill='currentColor'/><line x1='-10' y1='10' x2='10' y2='10' stroke='currentColor' stroke='currentColor' stroke-width='2'/><line x1='-10' y1='5' x2='10' y2='5' stroke='currentColor' stroke='currentColor' stroke-width='2'/><circle cx='0' cy='15' r='2' fill='currentColor'/></symbol><symbol id='switch_spst' viewBox='-25 -25 50 50'><circle cx='-15' cy='0' r='2' fill='currentColor' stroke='none'/><circle cx='15' cy='0' r='2' fill='currentColor' stroke='none'/><line x1='-15' y1='0' x2='0' y2='0' stroke='currentColor' stroke-width='2'/><line x1='0' y1='0' x2='15' y2='-15' stroke='currentColor' stroke-width='2'/><path d='M-15,0 A 15 15 0 0 1 -15,-10' fill='none' stroke='none'/></symbol><symbol id='panel' viewBox='-50 -40 100 80'><rect x='-45' y='-35' width='90' height='70' fill='none' stroke='currentColor' stroke-width='2' rx='5' ry='5'/></symbol><symbol id='wire' viewBox='-15 -15 30 30'><line x1='-10' y1='0' x2='10' y2='0' stroke='currentColor' stroke-width='2'/></symbol>
+    `;
+
+    // Global Constants
+    const gridSize = 20;
+    const SYMBOL_VISUAL_SIZE = 60;
+    const LABEL_PADDING = 10;
+
+    // Utility function
+    function snap(value) {
+      return Math.round(value / gridSize) * gridSize;
+    }
+
+    // ROUTING UTILITIES - Centralized routing logic (Inspired by https://gist.github.com/jose-mdz/4a8894c152383b9d7a870c24a04447e4)
+    const Routing = {
+        manhattanDistance(p1, p2) {
+            return Math.abs(p1.x - p2.x) + Math.abs(p1.y - p2.y);
+        },
+
+        // Finds the point on a rectangle's perimeter that is closest to a given external point.
+        // This is a simplified intersection calculation for axis-aligned rectangles.
+        getPerimeterPoint(rect, externalPoint) {
+            const cx = rect.x + rect.width / 2;
+            const cy = rect.y + rect.height / 2;
+            const dx = externalPoint.x - cx;
+            const dy = externalPoint.y - cy;
+            const absDx = Math.abs(dx);
+            const absDy = Math.abs(dy);
+
+            let x, y;
+
+            if (absDx > absDy) { // Intersection is likely on left/right sides
+                x = dx > 0 ? rect.x + rect.width : rect.x;
+                y = cy + dy * (rect.width / 2) / absDx;
+            } else { // Intersection is likely on top/bottom sides
+                y = dy > 0 ? rect.y + rect.height : rect.y;
+                x = cx + dx * (rect.height / 2) / absDy;
+            }
+
+            // Clamp the point to the rectangle's perimeter in case of floating point inaccuracies or
+            // if the external point is very far, causing the projection to go outside.
+            x = Math.max(rect.x, Math.min(rect.x + rect.width, x));
+            y = Math.max(rect.y, Math.min(rect.y + rect.height, y));
+
+            return { x: snap(x), y: snap(y) };
+        },
+
+        /**
+         * Calculates a Manhattan (axis-aligned) path between two points (p1 and p2),
+         * favoring either H-V (Horizontal then Vertical) or V-H (Vertical then Horizontal) based on total length.
+         * Returns an array of points forming the path, including p1 and p2.
+         * Ensures points are snapped to grid.
+         */
+        calculateManhattanSegment(p1, p2) {
+            p1 = { x: snap(p1.x), y: snap(p1.y) };
+            p2 = { x: snap(p2.x), y: snap(p2.y) };
+
+            const path = [];
+
+            // If points are already aligned, just a straight line
+            if (p1.x === p2.x && p1.y === p2.y) {
+                path.push(p1);
+            } else if (p1.x === p2.x || p1.y === p2.y) {
+                path.push(p1, p2);
+            } else {
+                // Option 1: Horizontal then Vertical (H-V) elbow
+                const hvPath = [p1, { x: p2.x, y: p1.y }, p2];
+                const hvLength = Routing.manhattanDistance(p1, hvPath[1]) + Routing.manhattanDistance(hvPath[1], p2);
+
+                // Option 2: Vertical then Horizontal (V-H) elbow
+                const vhPath = [p1, { x: p1.x, y: p2.y }, p2];
+                const vhLength = Routing.manhattanDistance(p1, vhPath[1]) + Routing.manhattanDistance(vhPath[1], p2);
+
+                if (hvLength <= vhLength) {
+                    path.push(...hvPath);
+                } else {
+                    path.push(...vhPath);
+                }
+            }
+            return path;
+        },
+
+        /**
+         * Routes a segment between two 'elements' (Node objects or plain {x,y} bend points).
+         * It resolves the actual start/end points on the perimeter of nodes if applicable,
+         * then calculates a Manhattan path between them.
+         * Returns an array of points for this segment.
+         */
+        routeSegment: function(startElement, endElement) {
+            let p1, p2; // The two specific points to connect for this segment
+
+            // Resolve actual start point (perimeter if Node, or point itself if bend)
+            if (startElement instanceof Node) {
+                p1 = this.getPerimeterPoint(startElement.getNodeBounds(), endElement instanceof Node ? endElement.getNodeCenter() : endElement);
+            } else {
+                p1 = startElement; // It's a bend point
+            }
+
+            // Resolve actual end point (perimeter if Node, or point itself if bend)
+            if (endElement instanceof Node) {
+                p2 = this.getPerimeterPoint(endElement.getNodeBounds(), startElement instanceof Node ? startElement.getNodeCenter() : startElement);
+            } else {
+                p2 = endElement; // It's a bend point
+            }
+
+            // Calculate the Manhattan path between these two resolved points
+            const segmentPath = this.calculateManhattanSegment(p1, p2);
+
+            // Filter out any consecutive duplicate points that might arise
+            const uniqueSegmentPath = [];
+            if (segmentPath.length > 0) {
+                uniqueSegmentPath.push(segmentPath[0]);
+                for (let i = 1; i < segmentPath.length; i++) {
+                    const p_curr = segmentPath[i];
+                    const p_prev_unique = uniqueSegmentPath[uniqueSegmentPath.length - 1];
+                    if (!(p_curr.x === p_prev_unique.x && p_curr.y === p_prev_unique.y)) {
+                        uniqueSegmentPath.push(p_curr);
+                    }
+                }
+            }
+            return uniqueSegmentPath;
+        }
+    };
+
+
+    /**
+     * Represents an electrical component (Node) in the diagram.
+     */
+    class Node {
+      constructor(diagram, id, type, name, x, y) {
+        this.diagram = diagram; // Reference to the parent Diagram instance
+        this.id = id;
+        this.type = type;
+        this.name = name;
+        this.x = snap(x);
+        this.y = snap(y);
+
+        this.rectWidth = 0; // Will be set in render
+        this.rectHeight = 0; // Will be set in render
+
+        this.svgGroup = null; // G element for the node
+        this.backgroundRect = null; // Rect for click/drag area
+        this.useElement = null; // Reference to the symbol
+        this.textElement = null; // Text label
+      }
+
+      render(svgContainer) {
+        this.svgGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        this.svgGroup.classList.add('node');
+        this.svgGroup.setAttribute('data-id', this.id);
+        this.svgGroup.setAttribute('transform', `translate(${this.x}, ${this.y})`);
+
+        // Determine dimensions for the background rect based on symbol and label
+        const symbolWidth = SYMBOL_VISUAL_SIZE;
+        const symbolHeight = SYMBOL_VISUAL_SIZE;
+        const labelLines = this.name.split('\n');
+        // Estimate max label width using average char width (6px)
+        const maxLabelWidth = labelLines.length > 0 ? Math.max(...labelLines.map(line => line.length)) * 6 : 0;
+        const labelHeight = labelLines.length * 12; // Estimate height using line-height
+
+        this.rectWidth = symbolWidth + LABEL_PADDING + maxLabelWidth + 10;
+        this.rectHeight = Math.max(symbolHeight, labelHeight) + 10;
+
+        this.backgroundRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        this.backgroundRect.classList.add('node-background');
+        this.backgroundRect.setAttribute('x', -this.rectWidth / 2);
+        this.backgroundRect.setAttribute('y', -this.rectHeight / 2);
+        this.backgroundRect.setAttribute('width', this.rectWidth);
+        this.backgroundRect.setAttribute('height', this.rectHeight);
+        this.svgGroup.appendChild(this.backgroundRect);
+
+        this.useElement = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+        this.useElement.setAttribute('href', `#${this.type}`);
+        this.useElement.setAttribute('width', SYMBOL_VISUAL_SIZE);
+        this.useElement.setAttribute('height', SYMBOL_VISUAL_SIZE);
+        this.useElement.setAttribute('x', -SYMBOL_VISUAL_SIZE / 2);
+        this.useElement.setAttribute('y', -SYMBOL_VISUAL_SIZE / 2);
+        this.svgGroup.appendChild(this.useElement);
+
+        this.textElement = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        this.textElement.classList.add('node-label');
+        this.textElement.setAttribute('text-anchor', 'start');
+        this.textElement.setAttribute('x', SYMBOL_VISUAL_SIZE / 2 + LABEL_PADDING);
+        this.textElement.setAttribute('y', '0');
+        this.name.split('\n').forEach((line, index) => {
+          const tspan = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
+          tspan.setAttribute('x', SYMBOL_VISUAL_SIZE / 2 + LABEL_PADDING);
+          tspan.setAttribute('dy', index === 0 ? 0 : '1.2em');
+          tspan.textContent = line;
+          this.textElement.appendChild(tspan);
+        });
+        this.svgGroup.appendChild(this.textElement);
+
+        svgContainer.appendChild(this.svgGroup);
+        this.enableDragging();
+        this.addContextMenuListener();
+        this.addClickListener(); // For connect mode
+      }
+
+      // Returns the center point of the node in SVG coordinates
+      getNodeCenter() {
+        return { x: this.x, y: this.y };
+      }
+
+      // Returns the bounding box of the node in SVG coordinates (relative to its group's transform)
+      // Node.x, Node.y is the center of the node/group.
+      // Rect's x/y are relative to the group's center.
+      getNodeBounds() {
+          const halfWidth = this.rectWidth / 2;
+          const halfHeight = this.rectHeight / 2;
+          return {
+              x: this.x - halfWidth,
+              y: this.y - halfHeight,
+              width: this.rectWidth,
+              height: this.rectHeight
+          };
+      }
+
+      updatePosition(newX, newY) {
+        this.x = snap(newX);
+        this.y = snap(newY);
+        this.svgGroup.setAttribute('transform', `translate(${this.x}, ${this.y})`);
+        this.diagram.redrawAllLinks(); // Inform the diagram to redraw links
+      }
+
+      enableDragging() {
+        let offsetX = 0;
+        let offsetY = 0;
+        let isDragging = false;
+        const svgCanvas = this.diagram.svg; // Get the SVG canvas from the diagram
+
+        this.backgroundRect.addEventListener('mousedown', (e) => {
+          if (this.diagram.currentMode !== 'select' || e.button !== 0) return; // Only drag in select mode with left click
+          isDragging = true;
+          const svgCoords = this.diagram.getSVGPoint(e.clientX, e.clientY);
+          offsetX = svgCoords.x - this.x;
+          offsetY = svgCoords.y - this.y;
+
+          svgCanvas.addEventListener('mousemove', onMouseMove);
+          svgCanvas.addEventListener('mouseup', onMouseUp);
+          e.stopPropagation(); // Prevent canvas dragging
+        });
+
+        const onMouseMove = (e) => {
+          if (!isDragging) return;
+          const svgCoords = this.diagram.getSVGPoint(e.clientX, e.clientY);
+          this.updatePosition(svgCoords.x - offsetX, svgCoords.y - offsetY);
+        };
+
+        const onMouseUp = () => {
+          isDragging = false;
+          svgCanvas.removeEventListener('mousemove', onMouseMove);
+          svgCanvas.removeEventListener('mouseup', onMouseUp);
+        };
+      }
+
+      addContextMenuListener() {
+        this.backgroundRect.addEventListener('contextmenu', (e) => {
+          e.preventDefault(); // Prevent default browser context menu
+          this.diagram.showContextMenu(e.clientX, e.clientY, 'node', this);
+          e.stopPropagation(); // Prevent canvas context menu
+        });
+      }
+
+      addClickListener() {
+        this.backgroundRect.addEventListener('click', (e) => {
+          if (this.diagram.currentMode === 'connect') {
+            this.diagram.handleNodeClickForLinking(this);
+            e.stopPropagation(); // Prevent canvas click from resetting link mode
+          }
+        });
+      }
+
+      highlight(doHighlight) {
+          if (doHighlight) {
+              this.svgGroup.classList.add('selected');
+          } else {
+              this.svgGroup.classList.remove('selected');
+          }
+      }
+
+      removeSvgElements() {
+          if (this.svgGroup) this.svgGroup.remove();
+      }
+    }
+
+    /**
+     * Represents a connection (Link) between two Nodes.
+     */
+    class Link {
+      constructor(diagram, fromNode, toNode, bends = []) {
+        this.diagram = diagram;
+        this.fromNode = fromNode;
+        this.toNode = toNode;
+        this.bends = bends; // Array of {x, y} for bend points
+
+        this.svgPolyline = null;
+        this.bendPointElements = []; // SVG circles for bend points
+        this.hoverElements = []; // Transparent lines and '+' indicators
+      }
+
+      render(svgContainer) {
+        this.svgPolyline = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+        this.svgPolyline.classList.add('link');
+        // Insert polyline before any node elements to ensure it's drawn behind them
+        svgContainer.insertBefore(this.svgPolyline, svgContainer.querySelector('.node') || null);
+        this.redrawPath();
+      }
+
+      redrawPath() {
+        // Clean up previous bend point handles and hover elements
+        this.bendPointElements.forEach(el => el.remove());
+        this.bendPointElements = [];
+        this.hoverElements.forEach(el => el.remove());
+        this.hoverElements = [];
+
+        // Ensure all bend points are snapped to the grid
+        this.bends = this.bends.map(b => ({ x: snap(b.x), y: snap(b.y) }));
+
+        const elementsToRoute = [this.fromNode, ...this.bends, this.toNode];
+        const finalPathPoints = [];
+
+        for (let i = 0; i < elementsToRoute.length - 1; i++) {
+            const startElement = elementsToRoute[i];
+            const endElement = elementsToRoute[i+1];
+
+            // Use the Routing utility to get the optimal segment path
+            const segment = Routing.routeSegment(startElement, endElement);
+
+            // Add segment points, skipping the first one (which is the last of the previous segment)
+            // to avoid duplicates when concatenating multiple segments
+            finalPathPoints.push(...segment.slice(i === 0 ? 0 : 1));
+        }
+
+        const pointStr = finalPathPoints.map(p => `${p.x},${p.y}`).join(' ');
+        this.svgPolyline.setAttribute('points', pointStr);
+
+        // **IMPORTANT:** Create hover hotspots BEFORE bend point handles
+        // so that bend points are drawn on top and receive click events.
+        this.createHoverHotspots(finalPathPoints);
+        this.createBendPointHandles();
+      }
+
+      createBendPointHandles() {
+        this.bends.forEach((bendPoint, i) => {
+          const handle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+          handle.setAttribute('cx', bendPoint.x);
+          handle.setAttribute('cy', bendPoint.y);
+          handle.setAttribute('r', '5');
+          handle.classList.add('bend-point');
+          this.diagram.svg.appendChild(handle);
+
+          let dragging = false;
+          handle.addEventListener('mousedown', (e) => {
+            console.log(`Bend point ${i} mousedown on element:`, e.target, `Current mode: ${this.diagram.currentMode}, Button: ${e.button}`);
+            if (this.diagram.currentMode !== 'select' || e.button !== 0) {
+                console.log('Not in select mode or not left click for bend point drag. Returning.');
+                return; // Only drag in select mode with left click
+            }
+            dragging = true;
+            const svgCoords = this.diagram.getSVGPoint(e.clientX, e.clientY);
+            // Offset for dragging relative to the bend point's exact position
+            bendPoint.offsetX = svgCoords.x - bendPoint.x;
+            bendPoint.offsetY = svgCoords.y - bendPoint.y;
+            console.log(`Starting drag for bend point ${i}. Initial pos: (${bendPoint.x}, ${bendPoint.y}), Offset: (${bendPoint.offsetX}, ${bendPoint.offsetY})`);
+
+
+            this.diagram.svg.addEventListener('mousemove', onMove);
+            this.diagram.svg.addEventListener('mouseup', onUp);
+            e.stopPropagation(); // Crucial: Stop propagation for mousedown on bend point
+          });
+
+          handle.addEventListener('dblclick', (e) => {
+            console.log(`Bend point ${i} dblclick detected.`);
+            if (this.diagram.currentMode !== 'select') return;
+            this.removeBendPoint(i);
+            e.stopPropagation(); // Stop dblclick on canvas
+          });
+
+          handle.addEventListener('contextmenu', (e) => {
+            console.log(`Bend point ${i} contextmenu detected.`);
+            e.preventDefault();
+            this.diagram.showContextMenu(e.clientX, e.clientY, 'bendPoint', {link: this, index: i});
+            e.stopPropagation();
+          });
+
+
+          const onMove = (e) => {
+            if (!dragging) return;
+            const svgCoords = this.diagram.getSVGPoint(e.clientX, e.clientY);
+            bendPoint.x = snap(svgCoords.x - bendPoint.offsetX);
+            bendPoint.y = snap(svgCoords.y - bendPoint.offsetY);
+            // console.log(`Dragging bend point ${i} to (${bendPoint.x}, ${bendPoint.y})`);
+            this.redrawPath();
+          };
+
+          const onUp = () => {
+            console.log(`Ending drag for bend point ${i}.`);
+            dragging = false;
+            this.diagram.svg.removeEventListener('mousemove', onMove);
+            this.diagram.svg.removeEventListener('mouseup', onUp);
+          };
+
+          this.bendPointElements.push(handle);
+        });
+      }
+
+      createHoverHotspots(pathPoints) {
+        for (let i = 0; i < pathPoints.length - 1; i++) {
+          const p1 = pathPoints[i];
+          const p2 = pathPoints[i+1];
+
+          // Create a transparent line to act as a larger hover target
+          const hotspotLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+          hotspotLine.setAttribute('x1', p1.x);
+          hotspotLine.setAttribute('y1', p1.y);
+          hotspotLine.setAttribute('x2', p2.x);
+          hotspotLine.setAttribute('y2', p2.y);
+          hotspotLine.setAttribute('stroke', 'transparent');
+          hotspotLine.setAttribute('stroke-width', '10');
+          hotspotLine.style.cursor = 'pointer';
+          this.diagram.svg.appendChild(hotspotLine);
+
+          const plusGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+          plusGroup.classList.add('plus-indicator');
+          plusGroup.style.opacity = '0';
+          plusGroup.style.pointerEvents = 'none'; // This ensures the text and circle don't block interaction
+
+          const midX = (p1.x + p2.x) / 2;
+          const midY = (p1.y + p2.y) / 2;
+          plusGroup.setAttribute('transform', `translate(${midX}, ${midY})`);
+
+          const plusCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+          plusCircle.setAttribute('r', '8');
+
+          const plusText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          plusText.textContent = '+';
+
+          plusGroup.appendChild(plusCircle);
+          plusGroup.appendChild(plusText);
+          this.diagram.svg.appendChild(plusGroup);
+
+          hotspotLine.addEventListener('mouseover', () => { plusGroup.style.opacity = '1'; });
+          hotspotLine.addEventListener('mouseout', () => { plusGroup.style.opacity = '0'; });
+          hotspotLine.addEventListener('click', (e) => {
+            if (this.diagram.currentMode !== 'select') return;
+            const svgCoords = this.diagram.getSVGPoint(e.clientX, e.clientY);
+            this.addBendPointAt(svgCoords.x, svgCoords.y);
+            e.stopPropagation();
+          });
+          hotspotLine.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            this.diagram.showContextMenu(e.clientX, e.clientY, 'link', this);
+            e.stopPropagation();
+          });
+
+          this.hoverElements.push(hotspotLine, plusGroup);
+        }
+      }
+
+      addBendPointAt(x, y) {
+        this.bends.push({ x: snap(x), y: snap(y) });
+        this.redrawPath();
+      }
+
+      removeBendPoint(index) {
+        if (index >= 0 && index < this.bends.length) {
+          this.bends.splice(index, 1);
+          this.redrawPath();
+        }
+      }
+
+      removeAllBendPoints() {
+        this.bends = [];
+        this.redrawPath();
+      }
+
+      // Removes all SVG elements associated with this link
+      removeSvgElements() {
+        if (this.svgPolyline) this.svgPolyline.remove();
+        this.bendPointElements.forEach(el => el.remove());
+        this.hoverElements.forEach(el => el.remove());
+      }
+    }
+
+    /**
+     * Manages the entire electrical diagram.
+     */
+    class Diagram {
+      constructor(svgId) {
+        this.svg = document.getElementById(svgId);
+        this.nodes = new Map(); // Store nodes by ID for easy lookup
+        this.links = [];
+        this.nextId = 100; // For new nodes
+
+        this.currentMode = 'select'; // 'select', 'addNode', 'connect'
+        this.linkingFromNode = null;
+
+        this.contextMenu = document.getElementById('context-menu');
+        this.toolButtons = {
+          addNode: document.getElementById('add-node-btn'),
+          connect: document.getElementById('connect-btn'),
+          modeDisplay: document.getElementById('current-mode-display')
+        };
+
+        this.panZoomState = {
+            x: 0, y: 0,
+            width: this.svg.clientWidth,
+            height: this.svg.clientHeight,
+            scale: 1
+        };
+
+        // Inject symbol definitions
+        this.svg.querySelector('defs').innerHTML = symbolSvgDefs;
+
+        this.setupEventListeners();
+        this.updateModeDisplay();
+        this.setupPanZoom();
+      }
+
+      setupEventListeners() {
+        this.toolButtons.addNode.addEventListener('click', () => this.setMode('addNode'));
+        this.toolButtons.connect.addEventListener('click', () => this.setMode('connect'));
+        this.svg.addEventListener('click', (e) => {
+          this.hideContextMenu(); // Hide context menu on any click on canvas
+
+          // This prevents the canvas click from firing if another element caught the click
+          // (e.g., node background rect, bend point, or hotspot line)
+          if (e.target !== this.svg) {
+              return;
+          }
+
+          if (this.currentMode === 'addNode') {
+            const svgCoords = this.getSVGPoint(e.clientX, e.clientY);
+            this.addNode(`node_${this.nextId++}`, 'light_bulb', 'New Device', svgCoords.x, svgCoords.y); // Default new node
+            this.setMode('select'); // Reset mode after adding
+          } else if (this.currentMode === 'connect' && this.linkingFromNode) {
+              // Clicked on canvas while in connect mode but no node was clicked
+              this.linkingFromNode.highlight(false);
+              this.linkingFromNode = null;
+          }
+        });
+
+        document.addEventListener('contextmenu', (e) => {
+            e.preventDefault(); // Prevent default browser context menu globally
+            this.hideContextMenu(); // Hide on any right-click outside an element
+        });
+      }
+
+      setupPanZoom() {
+        let isPanning = false;
+        let startPoint = { x: 0, y: 0 };
+
+        // Set initial viewBox
+        this.svg.setAttribute('viewBox', `${this.panZoomState.x} ${this.panZoomState.y} ${this.panZoomState.width} ${this.panZoomState.height}`);
+
+        this.svg.addEventListener('mousedown', (e) => {
+          // Check if it's a left click on the canvas (not on a node's background rect or bend point)
+          // `e.target` is the actual element clicked. If it's the SVG itself, start panning.
+          if (e.button === 0 && this.currentMode === 'select' && e.target === this.svg) {
+            isPanning = true;
+            startPoint = { x: e.clientX, y: e.clientY };
+            this.svg.style.cursor = 'grabbing';
+            e.stopPropagation(); // Prevent text selection etc.
+          }
+        });
+
+        this.svg.addEventListener('mousemove', (e) => {
+          if (!isPanning) return;
+          const dx = e.clientX - startPoint.x;
+          const dy = e.clientY - startPoint.y;
+
+          this.panZoomState.x -= dx / this.panZoomState.scale;
+          this.panZoomState.y -= dy / this.panZoomState.scale;
+
+          this.updateViewBox();
+          startPoint = { x: e.clientX, y: e.clientY };
+        });
+
+        this.svg.addEventListener('mouseup', () => {
+          isPanning = false;
+          this.svg.style.cursor = 'default';
+        });
+
+        // this.svg.addEventListener('wheel', (e) => {
+        //   e.preventDefault();
+        //   const zoomFactor = 1.1;
+        //   const mouseX = e.clientX;
+        //   const mouseY = e.clientY;
+
+        //   const svgPointBeforeZoom = this.getSVGPoint(mouseX, mouseY);
+
+        //   if (e.deltaY < 0) { // Zoom in
+        //     this.panZoomState.scale *= zoomFactor;
+        //   } else { // Zoom out
+        //     this.panZoomState.scale /= zoomFactor;
+        //   }
+
+        //   // Ensure scale doesn't go too low or too high
+        //   this.panZoomState.scale = Math.max(0.1, Math.min(5, this.panZoomState.scale));
+
+        //   // Calculate new viewBox dimensions based on new scale
+        //   this.panZoomState.width = this.svg.clientWidth / this.panZoomState.scale;
+        //   this.panZoomState.height = this.svg.clientHeight / this.panZoomState.scale;
+
+        //   // Adjust viewBox position to zoom around the mouse pointer
+        //   const svgPointAfterZoom = this.getSVGPoint(mouseX, mouseY); // Recalculate with new scale
+        //   this.panZoomState.x += (svgPointBeforeZoom.x - svgPointAfterZoom.x);
+        //   this.panZoomState.y += (svgPointBeforeZoom.y - svgPointAfterZoom.y);
+
+        //   this.updateViewBox();
+        //   this.redrawAllLinks(); // Links might need redrawing if their drawing depends on viewport scale (e.g. stroke-width)
+        // });
+      }
+
+      updateViewBox() {
+          this.svg.setAttribute('viewBox', `${this.panZoomState.x} ${this.panZoomState.y} ${this.panZoomState.width} ${this.panZoomState.height}`);
+          // Update stroke-width for fixed-size elements like bend points if needed
+          // For now, CSS handles it via non-scaling-stroke, but might be useful for future
+      }
+
+      // Converts client (screen) coordinates to SVG coordinates, considering pan and zoom
+      getSVGPoint(clientX, clientY) {
+          const CTM = this.svg.getScreenCTM();
+          const p = this.svg.createSVGPoint();
+          p.x = clientX;
+          p.y = clientY;
+          return p.matrixTransform(CTM.inverse());
+      }
+
+      setMode(mode) {
+        this.currentMode = mode;
+        this.updateModeDisplay();
+
+        // Reset any active linking highlights
+        if (this.linkingFromNode) {
+          this.linkingFromNode.highlight(false);
+          this.linkingFromNode = null;
+        }
+
+        // Update button active states
+        for (const btnKey in this.toolButtons) {
+            if (btnKey !== 'modeDisplay') {
+                this.toolButtons[btnKey].classList.remove('active');
+            }
+        }
+        if (this.toolButtons[mode]) {
+            this.toolButtons[mode].classList.add('active');
+        }
+      }
+
+      updateModeDisplay() {
+        this.toolButtons.modeDisplay.textContent = this.currentMode.charAt(0).toUpperCase() + this.currentMode.slice(1);
+      }
+
+      addNode(id, type, name, x, y) {
+        const node = new Node(this, id, type, name, x, y);
+        this.nodes.set(id, node);
+        node.render(this.svg);
+        return node;
+      }
+
+      deleteNode(nodeId) {
+          const nodeToDelete = this.nodes.get(nodeId);
+          if (!nodeToDelete) return;
+
+          // Remove all links connected to this node
+          this.links = this.links.filter(link => {
+              if (link.fromNode.id === nodeId || link.toNode.id === nodeId) {
+                  link.removeSvgElements(); // Remove SVG elements
+                  return false; // Filter out this link
+              }
+              return true;
+          });
+
+          // Remove node's SVG group
+          nodeToDelete.removeSvgElements();
+          this.nodes.delete(nodeId);
+          this.redrawAllLinks(); // Redraw remaining links if any
+      }
+
+      addLink(fromNodeId, toNodeId, bends = []) {
+        // Prevent linking a node to itself
+        if (fromNodeId === toNodeId) {
+            console.warn("Cannot link a node to itself.");
+            return null;
+        }
+        // Prevent duplicate links between the exact same two nodes
+        if (this.links.some(link => (link.fromNode.id === fromNodeId && link.toNode.id === toNodeId) ||
+                                     (link.fromNode.id === toNodeId && link.toNode.id === fromNodeId))) {
+            console.warn(`Link already exists between ${fromNodeId} and ${toNodeId}.`);
+            return null;
+        }
+
+        const fromNode = this.nodes.get(fromNodeId);
+        const toNode = this.nodes.get(toNodeId);
+        if (!fromNode || !toNode) {
+          console.error(`Cannot create link: Node(s) not found. From: ${fromNodeId}, To: ${toNodeId}`);
+          return null;
+        }
+        const link = new Link(this, fromNode, toNode, bends);
+        this.links.push(link);
+        link.render(this.svg);
+        return link;
+      }
+
+      deleteLink(linkToDelete) {
+          this.links = this.links.filter(link => link !== linkToDelete);
+          linkToDelete.removeSvgElements();
+          this.redrawAllLinks();
+      }
+
+      handleNodeClickForLinking(clickedNode) {
+        if (!this.linkingFromNode) {
+          // First click in connect mode: select 'from' node
+          this.linkingFromNode = clickedNode;
+          this.linkingFromNode.highlight(true);
+        } else if (this.linkingFromNode === clickedNode) {
+          // Clicked the same node twice: deselect
+          this.linkingFromNode.highlight(false);
+          this.linkingFromNode = null;
+        } else {
+          // Second click: create link
+          this.addLink(this.linkingFromNode.id, clickedNode.id);
+          this.linkingFromNode.highlight(false);
+          this.linkingFromNode = null;
+          this.setMode('select'); // Reset mode after creating link
+        }
+      }
+
+      redrawAllLinks() {
+        this.links.forEach(link => link.redrawPath());
+      }
+
+      showContextMenu(x, y, type, data) {
+          this.hideContextMenu(); // Hide any existing menu
+          const menuList = this.contextMenu.querySelector('ul');
+          menuList.innerHTML = ''; // Clear previous items
+
+          let items = [];
+          if (type === 'node') {
+              items.push({ label: 'Delete Node', action: () => this.deleteNode(data.id) });
+              // items.push({ label: 'Edit Properties', action: () => console.log('Edit properties for', data.id) });
+          } else if (type === 'link') {
+              items.push({ label: 'Delete Link', action: () => this.deleteLink(data) });
+              items.push({ label: 'Remove All Bends', action: () => data.removeAllBendPoints() });
+          } else if (type === 'bendPoint') {
+              items.push({ label: 'Remove Bend Point', action: () => data.link.removeBendPoint(data.index) });
+          }
+
+          items.forEach(item => {
+              const li = document.createElement('li');
+              li.textContent = item.label;
+              li.addEventListener('click', (e) => {
+                  item.action();
+                  this.hideContextMenu();
+                  e.stopPropagation();
+              });
+              menuList.appendChild(li);
+          });
+
+          this.contextMenu.style.left = `${x}px`;
+          this.contextMenu.style.top = `${y}px`;
+          this.contextMenu.style.display = 'block';
+      }
+
+      hideContextMenu() {
+          this.contextMenu.style.display = 'none';
+      }
+    }
+
+    // --- Initialize the Diagram ---
+    const diagram = new Diagram('canvas');
+
+    // Define initial nodes
+    const initialNodesData = [
+      { id: '1', type: 'source_ac', name: 'Main Utility\nPower', x: 100, y: 150 },
+      { id: '2', type: 'circuit_breaker', name: 'Main\nBreaker', x: 250, y: 150 },
+      { id: '3', type: 'panel', name: 'Main Power\nDistribution', x: 450, y: 150 },
+      // Branch 1
+      { id: '4', type: 'transformer', name: '208V to 120V\nXFMR', x: 650, y: 100 },
+      { id: '7', type: 'duplex_outlet', name: 'Workbench\nOutlet', x: 800, y: 100 },
+      // Branch 2
+      { id: '5', type: 'motor', name: 'HVAC\nUnit', x: 650, y: 250 },
+      // Branch 3
+      { id: '6', type: 'light_bulb', name: 'Office\nLighting', x: 650, y: 400 },
+      { id: '8', type: 'switch_spst', name: 'Light\nSwitch', x: 500, y: 400 },
+    ];
+
+    initialNodesData.forEach(nodeData => {
+      diagram.addNode(nodeData.id, nodeData.type, nodeData.name, nodeData.x, nodeData.y);
+    });
+
+    // Define initial links
+    const initialLinksData = [
+      { from: '1', to: '2', bends: [] },
+      { from: '2', to: '3', bends: [] },
+      { from: '3', to: '4', bends: [{x: 550, y: 100}] },
+      { from: '3', 'to': '5', bends: [{x: 550, y: 250}] },
+      { from: '3', to: '6', bends: [{x: 550, y: 400}] },
+      { from: '4', to: '7', bends: [] },
+      { from: '8', to: '6', bends: [] },
+    ];
+
+    initialLinksData.forEach(linkData => {
+      diagram.addLink(linkData.from, linkData.to, linkData.bends);
+    });
+
+    // Ensure all links are drawn correctly after initial setup
+    diagram.redrawAllLinks();
+  </script>
+</body>
+</html>
